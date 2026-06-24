@@ -1,0 +1,10 @@
+# Abaikan folder sesi dan dependensi
+auth/
+node_modules/
+
+# Abaikan database lokal (opsional, tapi disarankan)
+database_*.json
+
+# Abaikan file log atau file sistem lainnya
+.DS_Store
+npm-debug.log
