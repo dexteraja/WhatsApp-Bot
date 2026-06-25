@@ -110,9 +110,24 @@ function addBalance(jid, amount) {
 
 function deductBalance(jid, amount) {
   const p = getPlayer(jid);
-  p.balance -= amount;
-  savePlayers(); 
-  return amount;
+  // FIX BUGS: Clamp potongan agar saldo TIDAK PERNAH turun di bawah 0
+  const actualDeduct = Math.min(amount, p.balance);
+  p.balance = Math.max(0, p.balance - actualDeduct);
+
+  // FIX BUGS: Jika saldo menjadi 0 dan asuransi aktif, pulihkan otomatis ke insurancePayoutAmount
+  if (
+    p.balance === 0 &&
+    p.insurance &&
+    p.insurance.active &&
+    Date.now() < (p.insurance.expires_at || 0)
+  ) {
+    p.balance = cfg.insurancePayoutAmount;
+    p.insurance.active = false;
+    p.insurance.expires_at = null;
+  }
+
+  savePlayers();
+  return actualDeduct; // FIX BUGS: Kembalikan jumlah aktual yang dipotong, bukan amount asli
 }
 
 function getLeaderboard(limit = 10) {

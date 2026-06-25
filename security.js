@@ -55,4 +55,12 @@ function securityCheck(jid) {
   return { ok: true };
 }
 
-module.exports = { checkSpecificCooldown, securityCheck };
+// FIX BUGS: Tambahkan fungsi unbanUser yang sebelumnya dipanggil di index.js tapi tidak ada di sini.
+// Tanpa ini, !unban akan crash dengan "security.unbanUser is not a function".
+function unbanUser(jid) {
+  blacklist.delete(jid);
+  commandLog.delete(jid);
+  lastCommand.delete(jid);
+}
+
+module.exports = { checkSpecificCooldown, securityCheck, unbanUser };

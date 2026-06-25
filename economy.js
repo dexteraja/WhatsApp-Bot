@@ -50,7 +50,7 @@ function cmdKerja(jid) {
   const scene  = WORK_SCENES[Math.floor(Math.random() * WORK_SCENES.length)];
   const reward = Math.floor(Math.random() * (cfg.workReward.max - cfg.workReward.min + 1)) + cfg.workReward.min;
   p.last_work  = new Date().toISOString();
-  const earned = db.addBalance(jid, reward); 
+  const earned = db.addBalance(jid, reward);
   return `${scene.emoji} Kamu *${scene.text}* dan dapat *+${earned} koin*!\n💳 Saldo: ${db.getPlayer(jid).balance} koin`;
 }
 
@@ -165,23 +165,55 @@ function cmdSellCrypto(jid, qty) {
   const price = db.getCryptoPrice();
   p.crypto_balance -= qty;
   db.savePlayers();
-  const earned = db.addBalance(jid, qty * price); 
+  const earned = db.addBalance(jid, qty * price);
   return `💰 Jual *${qty} ${cfg.cryptoName}* @ ${price} koin\nDiterima: *+${earned.toLocaleString()} koin*\n💳 Saldo: ${db.getPlayer(jid).balance.toLocaleString()} koin`;
 }
 
-function cmdTransfer(jid, toJid, amount, chatId) {
-  if (!Number.isInteger(amount) || amount <= 0) return "❌ Nominal tidak valid.";
-  if (jid === toJid) return "❌ Tidak bisa transfer ke diri sendiri.";
-  const from  = db.getPlayer(jid);
-  const tax   = Math.floor(amount * (cfg.transferTaxPercent / 100));
+function cmdTransfer(jid, toJidRaw, amount, chatId) {
+  // Normalisasi target JID — handle @s.whatsapp.net, @lid, @g.us, teks @628xxx
+  let toNumber = String(toJidRaw)
+    .replace(/@[^@]+$/i, "")  // hapus domain apapun
+    .replace(/[^0-9]/g, "");  // sisakan digit saja
+  const toJid = `${toNumber}@s.whatsapp.net`;
+
+  // Normalisasi JID pengirim agar konsisten
+  const fromNumber = String(jid)
+    .replace(/@[^@]+$/i, "")
+    .replace(/[^0-9]/g, "");
+  const fromJid = `${fromNumber}@s.whatsapp.net`;
+
+  // Validasi nomor tujuan — minimal 9 digit, maks 15 digit (standar E.164)
+  if (!toNumber || toNumber.length < 9 || toNumber.length > 15)
+    return "❌ Nomor tujuan tidak valid. Gunakan format: *628xxxxxxxxxx*";
+
+  // Validasi nominal — harus integer positif
+  if (!Number.isInteger(amount) || amount <= 0)
+    return "❌ Nominal transfer harus angka bulat lebih dari 0.";
+
+  // Cegah transfer ke diri sendiri
+  if (fromNumber === toNumber) return "❌ Tidak bisa transfer ke diri sendiri.";
+
+  const from = db.getPlayer(fromJid);
+  const tax  = Math.floor(amount * (cfg.transferTaxPercent / 100));
   const total = amount + tax;
+
+  // Cek saldo mencukupi termasuk pajak sebelum deduct apapun
   if (from.balance < total)
-    return `❌ Butuh *${total} koin* (termasuk pajak ${tax} koin). Saldo: ${from.balance} koin.`;
+    return `❌ Butuh *${total.toLocaleString()} koin* (transfer ${amount.toLocaleString()} + pajak ${tax.toLocaleString()}). Saldo kamu: *${from.balance.toLocaleString()} koin*.`;
+
+  // Atomic — deduct pengirim, kredit penerima, kas grup
   from.balance -= total;
   db.savePlayers();
-  db.addCashPool(chatId, tax);
   db.addBalance(toJid, amount);
-  return `💸 Transfer *${amount} koin* ke @${toJid.split("@")[0]}\nPajak: ${tax} koin → Kas Grup\n💳 Saldo sisa: ${from.balance} koin`;
+  db.addCashPool(chatId, tax);
+
+  return (
+    `💸 *Transfer Berhasil!*\n` +
+    `Ke: @${toNumber}\n` +
+    `Nominal: *${amount.toLocaleString()} koin*\n` +
+    `Pajak: *${tax.toLocaleString()} koin* → Kas Grup\n` +
+    `💳 Saldo sisa: *${from.balance.toLocaleString()} koin*`
+  );
 }
 
 function cmdKasGrup(chatId) {

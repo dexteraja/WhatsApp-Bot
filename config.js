@@ -6,7 +6,7 @@ global.botConfig = {
   // ── EKONOMI ──
   startingBalance: 5000,
   dailyAmount: 1000,
-  taxPercent: 5,
+  taxPercent: 6,
   transferTaxPercent: 5,
   debtMaxLoan: 5000,
   debtIncomeDeductPercent: 50,
@@ -22,7 +22,7 @@ global.botConfig = {
   cryptoName: "COLICOIN",
   cryptoInitialPrice: 100,
   cryptoPriceFluctuation: 0.20,
-  cryptoPriceIntervalMs: 600000,
+  cryptoPriceIntervalMs: 10000,
 
   // ── KASINO ──
   casinoCooldownMs: 3000,
@@ -47,6 +47,30 @@ global.botConfig = {
     tebakkoin:    2.0,
     jackpotGanda: 3.0,
     bomberman:    2.0,
+    // Game baru
+    tebakkartu:   3.0,
+    tebakwarna:   2.0,
+    dadu3:        5.0,
+    tebakganjilgenap: 2.0,
+    kartupetak:   2.5,
+    membalik:     3.0,
+    tanggal:      6.0,
+    tebakprima:   4.0,
+    lemparkartu:  2.0,
+    tebakdadu:    6.0,
+    petarung:     2.0,
+    lombarenang:  3.5,
+    undian:       2.0,
+    tembakbintang:3.0,
+    pindahkoin:   2.0,
+    naiktangga:   3.0,
+    cuacahari:    2.5,
+    bombparty:    4.0,
+    tebakwaktu:   5.0,
+    baccarat:     2.0,
+    baccaratTie:  8.0,
+    dragontiger:  2.0,
+    dragontigerTie: 8.0,
   },
 
   // ── HUNT / MANCING / GACHA ──
@@ -75,13 +99,39 @@ global.botConfig = {
   maxQuizPerDay: 200,
   quizTimeoutMs: 30000,
   quizAnswerCooldownMs: 2000,
-  quizReward: { min: 200, max: 500 },
+  quizReward: { min: 300, max: 600 },
 
   // ── KEAMANAN ──
-  commandCooldownMs: 1500,
+  commandCooldownMs: 1000,
   rateLimitMax: 6,
   rateLimitWindowMs: 3000,
   rateLimitBanMs: 3600000,
+
+  // ── KPK SYSTEM ──
+  kpkInvestigasiThreshold: 50000,   // menang kasino > 50rb = kena radar KPK
+  kpkRandomCatchChance:    0.05,    // 5% chance kena tiap transaksi besar
+
+  // ── RAMPOK ──
+  rampokCooldownMs: 30 * 60 * 1000,
+  rampokSuccessChance: 0.40,
+  rampokMaxCuri: 5000,
+
+  // ── LOTERE ──
+  lotereHargaTiket: 500,
+  lotereMaxTiket: 10,
+
+  // ── GUILD ──
+  guildBiayaBuat: 2000,
+  guildMaxAnggota: 20,
+
+  // ── SAHAM ──
+  sahamFluktuasi: 0.12,
+  sahamIntervalMs: 15 * 60 * 1000,
+
+  // ── GAME PREMIUM ──
+  crashMaxMulti: 20.0,
+  towerMaxLevel: 8,
+  togelMaxBet:   50000,
 
   // ── PESAN SISTEM ──
   msg: {
@@ -91,6 +141,7 @@ global.botConfig = {
     quizFull:    "🛑 Kuis hari ini sudah habis.",
     quizLocked:  "⏳ Ada kuis yang sedang berjalan. Jawab dulu!",
     onCooldown:  (w) => `⏳ Sabar dulu *${w} detik* lagi.`,
+    kpkBlocked:  "🚔 KPK memblokir transaksimu! Selesaikan kasus dulu: *!statuskpk*",
   }
 };
 
