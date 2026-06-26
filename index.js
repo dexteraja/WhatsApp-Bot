@@ -1,5 +1,5 @@
 // ============================================================
-//  index.js — Main Handler (V5 | Hard Activation Gate)
+//  index.js — Main Handler (V5.3 — Unified Asset & Tax System)
 //  Kompatibel dengan: Baileys (@whiskeysockets/baileys)
 // ============================================================
 require("./config");
@@ -11,11 +11,17 @@ const eco      = require("./economy");
 const prop     = require("./properti");
 const social   = require("./social");
 const sharp    = require("sharp");
+const { exec } = require("child_process");
+const fs       = require("fs");
+
+// Buat folder temp otomatis untuk pemrosesan stiker FFMPEG
+if (!fs.existsSync("./temp")) fs.mkdirSync("./temp");
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
-  DisconnectReason
+  DisconnectReason,
+  downloadMediaMessage
 } = require("@whiskeysockets/baileys");
 
 const express = require('express');
@@ -64,9 +70,6 @@ async function startBot() {
       if (shouldReconnect) startBot();
     } else if (connection === "open") {
       console.log("\n✅ BOT ONLINE DAN SIAP! 🎉\n");
-      // Broadcast hasil lotere ke semua grup aktif
-      const origUndian = social.undianLotere;
-      // Override untuk broadcast hasil — dipanggil otomatis oleh jadwal di social.js
     }
   });
 
@@ -79,7 +82,7 @@ async function startBot() {
 }
 
 // ──────────────────────────────────────────────────────────────
-//  FUNGSI UTILITAS
+//  FUNGSI UTILITAS, MEDIA & UNIFIED TAX LOGIC
 // ──────────────────────────────────────────────────────────────
 async function reply(sock, chatId, text, mentions = []) {
   try {
@@ -89,64 +92,103 @@ async function reply(sock, chatId, text, mentions = []) {
   }
 }
 
-// ── Stiker ────────────────────────────────────────────────
-async function cmdStiker(sock, msg, chatId, jid) {
-  const { downloadMediaMessage } = require("@whiskeysockets/baileys");
+const getRandom = (ext) => `${Date.now()}${Math.floor(Math.random() * 1000)}${ext}`;
 
-  // Baileys menyimpan foto+caption di imageMessage.caption, bukan conversation
-  // Jadi kita cek semua kemungkinan struktur pesan
+
+// ── Handler: !stiker (Image / Video / GIF ke WebP) ────────────
+async function cmdStiker(sock, msg, chatId, jid) {
   const directImage   = msg.message?.imageMessage;
+  const directVideo   = msg.message?.videoMessage;
   const quotedCtx     = msg.message?.extendedTextMessage?.contextInfo;
   const quotedMsg     = quotedCtx?.quotedMessage;
-  const quotedImage   = quotedMsg?.imageMessage || quotedMsg?.stickerMessage;
+  const quotedImage   = quotedMsg?.imageMessage;
+  const quotedVideo   = quotedMsg?.videoMessage;
 
-  if (!directImage && !quotedImage) {
-    return await reply(sock, chatId, "❌ Kirim foto dengan caption *!stiker*, atau reply foto orang lain dengan *!stiker*.", [jid]);
+  const isVideo = directVideo || quotedVideo;
+  const isImage = directImage || quotedImage;
+
+  if (!isImage && !isVideo) {
+    return await reply(sock, chatId, "❌ Kirim foto/video/GIF (<10 detik) dengan caption *!stiker*, atau reply media orang lain dengan *!stiker*.", [jid]);
   }
 
   try {
-    let buffer;
+    if (isVideo) {
+      const vidMsg = directVideo || quotedVideo;
+      if (vidMsg.seconds > 10) {
+        return await reply(sock, chatId, "❌ Durasi video/GIF maksimal 10 detik agar tidak berat!", [jid]);
+      }
+    }
 
-    if (directImage) {
-      // Pass sock sebagai reuploadRequest agar bisa re-download dari server WA
-      buffer = await downloadMediaMessage(
-        msg,
-        "buffer",
-        {},
-        { reuploadRequest: sock.updateMediaMessage }
-      );
+    let buffer;
+    if (directImage || directVideo) {
+      buffer = await downloadMediaMessage(msg, "buffer", {}, { reuploadRequest: sock.updateMediaMessage });
     } else {
-      // Quoted image — buat ulang pesan dengan key yang valid
       const fakeMsg = {
-        key: {
-          remoteJid: chatId,
-          id: quotedCtx.stanzaId,
-          participant: quotedCtx.participant || chatId,
-        },
+        key: { remoteJid: chatId, id: quotedCtx.stanzaId, participant: quotedCtx.participant || chatId },
         message: quotedMsg,
       };
-      buffer = await downloadMediaMessage(
-        fakeMsg,
-        "buffer",
-        {},
-        { reuploadRequest: sock.updateMediaMessage }
-      );
+      buffer = await downloadMediaMessage(fakeMsg, "buffer", {}, { reuploadRequest: sock.updateMediaMessage });
     }
 
     if (!buffer || buffer.length === 0) throw new Error("Buffer kosong setelah download");
 
-    // Konversi ke WebP 512x512
-    const webp = await sharp(buffer)
-      .resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .webp()
-      .toBuffer();
+    if (isImage && !isVideo) {
+      const webp = await sharp(buffer)
+        .resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp()
+        .toBuffer();
+      await sock.sendMessage(chatId, { sticker: webp }, { quoted: msg });
+    } else if (isVideo) {
+      const tempInput = `./temp/${getRandom('.mp4')}`;
+      const tempOutput = `./temp/${getRandom('.webp')}`;
+      fs.writeFileSync(tempInput, buffer);
 
-    await sock.sendMessage(chatId, { sticker: webp }, { quoted: msg });
-
+      exec(`ffmpeg -i ${tempInput} -t 10 -vcodec libwebp -filter_complex "scale='min(512,iw)':'min(512,ih)':force_original_aspect_ratio=decrease,fps=15, pad=512:512:-1:-1:color=white@0.0, split [a][b]; [a] palettegen=reserve_transparent=on:transparency_color=ffffff [p]; [b][p] paletteuse" -loop 0 -vsync 0 -preset default ${tempOutput}`, async (err) => {
+        if (err) {
+          console.error(err);
+          await reply(sock, chatId, "❌ Gagal mengonversi video ke stiker.", [jid]);
+        } else {
+          const webpBuffer = fs.readFileSync(tempOutput);
+          await sock.sendMessage(chatId, { sticker: webpBuffer }, { quoted: msg });
+        }
+        if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
+        if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
+      });
+    }
   } catch (err) {
     console.error("❌ Stiker error:", err.message);
-    console.error(err.stack);
-    await reply(sock, chatId, `❌ Gagal membuat stiker: ${err.message}`, [jid]);
+    await reply(sock, chatId, `❌ Gagal memproses media: ${err.message}`, [jid]);
+  }
+}
+
+// ── Handler: !stiker2 (WebP Stiker ke Image JPG) ─────────────
+async function cmdStikerToImage(sock, msg, chatId, jid) {
+  const quotedCtx = msg.message?.extendedTextMessage?.contextInfo;
+  const quotedMsg = quotedCtx?.quotedMessage;
+  const quotedSticker = quotedMsg?.stickerMessage;
+
+  if (!quotedSticker) {
+    return await reply(sock, chatId, "❌ Reply stiker yang ingin diubah menjadi gambar dengan caption *!stiker2*.", [jid]);
+  }
+
+  try {
+    const fakeMsg = {
+      key: { remoteJid: chatId, id: quotedCtx.stanzaId, participant: quotedCtx.participant || chatId },
+      message: quotedMsg,
+    };
+    
+    const buffer = await downloadMediaMessage(fakeMsg, "buffer", {}, { reuploadRequest: sock.updateMediaMessage });
+    if (!buffer) throw new Error("Gagal mendownload stiker.");
+
+    const jpegBuffer = await sharp(buffer)
+      .flatten({ background: { r: 255, g: 255, b: 255 } }) 
+      .jpeg()
+      .toBuffer();
+
+    await sock.sendMessage(chatId, { image: jpegBuffer, caption: "🖼️ Ini gambarnya!" }, { quoted: msg });
+  } catch (err) {
+    console.error("❌ Stiker2 error:", err.message);
+    await reply(sock, chatId, `❌ Gagal mengubah stiker: ${err.message}`, [jid]);
   }
 }
 
@@ -165,7 +207,6 @@ async function isGroupAdmin(sock, groupId, jid) {
 //  HANDLE PESAN UTAMA
 // ──────────────────────────────────────────────────────────────
 async function handleMessage(sock, msg) {
-  // Abaikan pesan dari bot sendiri
   if (!msg.message || msg.key.fromMe) return;
 
   const isGroup = msg.key.remoteJid.endsWith("@g.us");
@@ -182,35 +223,22 @@ async function handleMessage(sock, msg) {
   ).trim();
   if (!body) return;
 
-  // FIX BUGS: Ambil daftar JID yang benar-benar di-mention dari metadata Baileys.
-  // Ini adalah satu-satunya cara akurat — jangan andalkan parsing teks @628xxx
-  // karena bisa salah nomor, kurang digit, atau malah angka saldo ikut ke-capture.
   const mentionedJids = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
 
-  // ═══════════════════════════════════════════════════════
-  //  HARD GATE: Jika grup dan belum diaktifkan →
-  //  BOT TIDAK AKAN MERESPON APAPUN, termasuk command
-  //  KECUALI: !botaktif dari Owner (agar bisa diaktifkan)
-  // ═══════════════════════════════════════════════════════
- const isOwner = (jid === "213147063480434@lid");
-const isActive = db.isGroupActive(chatId);
+  const isOwner = (jid === "213147063480434@lid"); 
+  const isActive = db.isGroupActive(chatId);
 
   if (isGroup && !isActive) {
-    // Hanya izinkan !botaktif dari Owner — sisanya diabaikan total
     if (body.toLowerCase().trim() === "!botaktif" && isOwner) {
       const res = db.activateGroup(chatId);
       return await reply(sock, chatId, res, [jid]);
     }
-    return; // Diam total, tidak ada respons apapun
+    return; 
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  GRUP AKTIF (atau private chat) — proses normal
-  // ═══════════════════════════════════════════════════════
   if (isGroup) db.registerGroupMember(chatId, jid);
   if (isGroup) social.trackActivity(chatId, jid, "msg");
 
-  // Cek security (spam / cooldown)
   const sec = security.securityCheck(jid);
   if (!sec.ok) {
     if (sec.reason === "banned") return;
@@ -221,24 +249,19 @@ const isActive = db.isGroupActive(chatId);
   const args    = body.split(" ");
   const command = args[0].toLowerCase();
 
-  // ── Jawaban kuis (non-command) ─────────────────────────
   if (!command.startsWith("!")) {
     const res = games.cmdJawabKuis(chatId, jid, body);
     if (res) await reply(sock, chatId, res, [jid]);
     return;
   }
 
-  // ── Shortcut multi-turn Blackjack ──────────────────────
   if (["!hit", "!stand"].includes(command)) {
-    const fn = command === "!hit"
-      ? () => games.cmdBlackjackHit(jid)
-      : () => games.cmdBlackjackStand(jid);
+    const fn = command === "!hit" ? () => games.cmdBlackjackHit(jid) : () => games.cmdBlackjackStand(jid);
     const res = fn();
     if (res) await reply(sock, chatId, res, [jid]);
     return;
   }
 
-  // ── Parse argumen ──────────────────────────────────────
   const cleanNum  = (s) => (s ? parseInt(s.replace(/[^0-9]/g, ""), 10) : 0);
   const cleanBet  = cleanNum(args[1]);
   const cleanBet2 = cleanNum(args[2]);
@@ -258,21 +281,13 @@ const isActive = db.isGroupActive(chatId);
       if (isOwner) res = db.deactivateGroup(chatId);
       else res = "❌ Hanya owner bot yang bisa menonaktifkan.";
       break;
-
-    // ── Owner Commands (Debug / Maintenance) ─────────────
     case "!resetkuis":
-      if (isOwner) {
-        db.resetQuizzes();
-        res = "✅ Reset kuis harian berhasil.";
-      } else res = "❌ Hanya owner bot yang bisa reset kuis.";
+      if (isOwner) { db.resetQuizzes(); res = "✅ Reset kuis harian berhasil."; } 
+      else res = "❌ Hanya owner bot yang bisa reset kuis.";
       break;  
-    
     case "!unban": {
-      // FIX BUGS: Guard isOwner diperbaiki — break dengan pesan error, bukan return langsung
       if (!isOwner) { res = "❌ Khusus Owner!"; break; }
-      // FIX BUGS: Cek args[1] tidak kosong sebelum parsing
       if (!args[1]) { res = "❌ Format: *!unban [nomor_wa]*\nContoh: !unban 628xxx"; break; }
-      // FIX BUGS: unbanUser kini tersedia di security.js — parsing nomor robust
       const unbanNumber = args[1].replace(/[^0-9]/g, "");
       if (!unbanNumber) { res = "❌ Nomor tidak valid."; break; }
       const unbanTarget = `${unbanNumber}@s.whatsapp.net`;
@@ -281,12 +296,18 @@ const isActive = db.isGroupActive(chatId);
       break;
     }
 
-    // ── Stiker ─────────────────────────────────────────────
+    // ── Media & Stiker ─────────────────────────────────────
     case "!stiker":
+    case "!sticker":
+    case "!s":
       await cmdStiker(sock, msg, chatId, jid);
-      return; // langsung return, tidak pakai flow res biasa
+      return; 
+    case "!stiker2":
+    case "!toimage":
+      await cmdStikerToImage(sock, msg, chatId, jid);
+      return;
 
-    // ── Ekonomi ────────────────────────────────────────
+    // ── Ekonomi Dasar ─────────────────────────────
     case "!saldo":       res = eco.cmdSaldo(jid); break;
     case "!daily":       res = eco.cmdDaily(jid); social.trackMisi(jid, "daily"); break;
     case "!kerja":       res = eco.cmdKerja(jid); social.trackMisi(jid, "kerja"); social.trackActivity(chatId, jid, "kerja"); break;
@@ -300,7 +321,6 @@ const isActive = db.isGroupActive(chatId);
       if (!args[1] || !args[2]) {
         res = "❌ Format: *!transfer [@tag] [jumlah]*\nContoh: *!transfer @628xxx 500*";
       } else {
-        // Prioritaskan JID dari contextInfo Baileys — akurat 100% untuk @mention
         const transferTarget = mentionedJids[0] || args[1];
         const transferAmount = cleanNum(args[2]);
         res = eco.cmdTransfer(jid, transferTarget, transferAmount, chatId);
@@ -313,6 +333,26 @@ const isActive = db.isGroupActive(chatId);
       res = eco.cmdBagiKas(chatId, jid, isAdmin || isOwner);
       break;
     }
+
+    // ══════════════════════════════════════════════════
+    //  PROPERTI, ASET UNIFIED & PAJAK PROGRESSIF
+    // ══════════════════════════════════════════════════
+    case "!pajak":
+      res = eco.cmdPajak(jid); // Membaca data p.properti asli
+      break;
+    case "!beliaset":
+    case "!beliproperti": 
+      res = prop.cmdBeliProperti(jid, arg1Text); // Disatukan ke core engine properti.js
+      break;
+    case "!tokoaset":     res = prop.cmdTokoProperti(arg1Text); break;
+    case "!jualproperti": res = prop.cmdJualProperti(jid, arg1Text); break;
+    case "!asetku":       res = prop.cmdAsetku(jid); break;
+    case "!klaimincome":  res = prop.cmdKlaimIncome(jid); break;
+    
+    // KPK
+    case "!statuskpk":   res = prop.cmdStatusKPK(jid); break;
+    case "!bayardenda":  res = prop.cmdBayarDenda(jid, cleanBet); break;
+    case "!tebusaset":   res = prop.cmdTebusAset(jid, arg1Text); break;
 
     // ── Kasino (12 Games) ──────────────────────────────
     case "!slot": {
@@ -391,19 +431,6 @@ const isActive = db.isGroupActive(chatId);
       break;
 
     // ══════════════════════════════════════════════════
-    //  PROPERTI & ASET
-    // ══════════════════════════════════════════════════
-    case "!tokoaset":     res = prop.cmdTokoProperti(arg1Text); break;
-    case "!beliproperti": res = prop.cmdBeliProperti(jid, arg1Text); break;
-    case "!jualproperti": res = prop.cmdJualProperti(jid, arg1Text); break;
-    case "!asetku":       res = prop.cmdAsetku(jid); break;
-    case "!klaimincome":  res = prop.cmdKlaimIncome(jid); break;
-    // KPK
-    case "!statuskpk":   res = prop.cmdStatusKPK(jid); break;
-    case "!bayardenda":  res = prop.cmdBayarDenda(jid, cleanBet); break;
-    case "!tebusaset":   res = prop.cmdTebusAset(jid, arg1Text); break;
-
-    // ══════════════════════════════════════════════════
     //  TOKO BUFF & SAHAM
     // ══════════════════════════════════════════════════
     case "!toko":        res = social.cmdToko(); break;
@@ -454,7 +481,7 @@ const isActive = db.isGroupActive(chatId);
     //  MISI & REKAP
     // ══════════════════════════════════════════════════
     case "!misi":       res = social.cmdMisi(jid); break;
-    case "!klaiммisi":  res = social.cmdKlaimMisi(jid, arg1Text); break;
+    case "!klaimmisi":  res = social.cmdKlaimMisi(jid, arg1Text); break;
     case "!rekap":      res = social.cmdRekap(chatId); break;
 
     // ══════════════════════════════════════════════════
@@ -531,16 +558,10 @@ const isActive = db.isGroupActive(chatId);
     }
 
     default:
-      return; // Command tidak dikenali → diam
+      return; 
   }
 
-  // ── Kirim respons ──────────────────────────────────────
   if (res) {
-    // FIX BUGS: Bangun mentionList dari sumber yang benar:
-    // 1. Selalu include pengirim (jid) — pasti ada
-    // 2. Include mentionedJids dari Baileys contextInfo — akurat 100% untuk @tag
-    // Tidak pakai regex teks sama sekali karena angka saldo/koin bisa ikut ke-capture
-    // dan malah men-tag nomor WA orang asing yang tidak ada hubungannya.
     const mentionSet = new Set([jid, ...mentionedJids]);
     const mentionList = Array.from(mentionSet);
     await reply(sock, chatId, res, mentionList);
@@ -552,7 +573,19 @@ const isActive = db.isGroupActive(chatId);
 // ──────────────────────────────────────────────────────────────
 function buildMenu() {
   return (
-    `🎮 *MINI GAMES HUB* — 65+ Game & Fitur!\n\n` +
+    `🎮 *MINI GAMES HUB* — 65+ Game & Fitur Terintegrasi!\n\n` +
+
+    `🏛️ *PROPERTI, ASET & PAJAK (FIXED)*\n` +
+    `• !tokoaset — Daftar kendaraan & properti dijual\n` +
+    `• !beliproperti [id] — Beli aset penambah income (Alias: !beliaset)\n` +
+    `• !jualproperti [id] — Jual aset kembali (Dipotong 30%)\n` +
+    `• !asetku — Lihat inventaris properti yang kamu miliki\n` +
+    `• !klaimincome — Ambil semua pasif income dari asetmu\n` +
+    `• !pajak — Cek rincian tagihan pajak progresif berkala\n\n` +
+
+    `🎨 *MEDIA & STIKER PRO*\n` +
+    `• !stiker — Ubah Gambar/Video/GIF (<10s) ke Stiker WebP\n` +
+    `• !stiker2 — Ekstrak media stiker kembali jadi Gambar\n\n` +
 
     `🎰 *KASINO KLASIK (12)*\n` +
     `!slot !coinflip !tebakangka !ranjau\n` +
@@ -583,67 +616,59 @@ function buildMenu() {
     `🗺️ *RPG (5)*\n` +
     `!hunt !mancing !gacha !jual !ekspedisi\n\n` +
 
-    `🚀 *KASINO PREMIUM BARU (8)*\n` +
-    `!crash [bet] [target] — Pesawat crash multiplier\n` +
-    `!warkartu [bet] — Adu kartu vs dealer\n` +
-    `!sicbo [bet] [besar/kecil/triple/double]\n` +
-    `!pokerliar [bet] — 5 kartu poker\n` +
-    `!plinko [bet] — Bola jatuh multiplier\n` +
-    `!tower [bet] — Naiki tower, hindari bom\n` +
-    `!togel [bet] [00-99] [as/bb] — Togel mini\n\n` +
+    `🚀 *KASINO PREMIUM (8)*\n` +
+    `• !crash [bet] [multiplier] — Pesawat simulator\n` +
+    `• !warkartu [bet] — Bandingkan kartu vs Dealer\n` +
+    `• !sicbo [bet] [taruhan] — Tebak dadu premium\n` +
+    `• !pokerliar [bet] — 5-Card Draw Poker\n` +
+    `• !plinko [bet] — Jatuhkan bola keberuntungan\n` +
+    `• !tower [bet] — Panjat menara bebas bom\n` +
+    `• !togel [bet] [00-99] [as/bb] — Tebak angka berhadiah\n\n` +
 
-    `🟩 *GAME SOSIAL (2)*\n` +
-    `!wordle — Tebak kata 5 huruf (grup)\n` +
-    `!hangman — Tebak kata + nyawa\n\n` +
+    `🟩 *GAME SOSIAL GRUP (2)*\n` +
+    `• !wordle — Tebak 5 huruf rahasia\n` +
+    `• !hangman — Jangan biarkan karakter tergantung\n\n` +
 
-    `🏘️ *PROPERTI & ASET*\n` +
-    `!tokoaset — Lihat toko properti\n` +
-    `!beliproperti [id] — Beli aset\n` +
-    `!jualproperti [id] — Jual aset (70%)\n` +
-    `!asetku — Lihat aset milik\n` +
-    `!klaimincome — Klaim passive income\n\n` +
+    `🚔 *SISTEM REGULASI KPK*\n` +
+    `• !statuskpk — Cek radar denda & penyitaan\n` +
+    `• !bayardenda [nominal] — Cicil tanggungan KPK\n` +
+    `• !tebusaset [id] — Ambil kembali aset sitaan\n\n` +
 
-    `🚔 *SISTEM KPK*\n` +
-    `!statuskpk — Cek status investigasi\n` +
-    `!bayardenda [jumlah] — Bayar denda KPK\n` +
-    `!tebusaset [id] — Tebus aset yang disita\n\n` +
-
-    `🛒 *TOKO BUFF & EKONOMI LANJUTAN*\n` +
-    `!toko — Buff sementara (kerja 2x, jimat dll)\n` +
-    `!belibuff [id] — Beli buff\n` +
-    `!buffsaya — Cek buff aktif\n` +
-    `!saham — Bursa saham Nusantara\n` +
-    `!belisaham [kode] [qty] — Beli saham\n` +
-    `!jualsaham [kode] [qty] — Jual saham\n` +
-    `!portofolio — Lihat portofolio sahammu\n` +
-    `!rampok @target — Coba curi koin orang\n` +
-    `!hadiah @target [item] — Kirim item\n\n` +
+    `🛒 *TOKO BUFF & SAHAM GLOBAL*\n` +
+    `• !toko — Akses item buff pengganda income\n` +
+    `• !belibuff [id] — Aktivasi item efek khusus\n` +
+    `• !buffsaya — Cek masa aktif buff\n` +
+    `• !saham — Cek pergerakan bursa efek pasar\n` +
+    `• !belisaham [kode] [qty] — Investasi modal\n` +
+    `• !jualsaham [kode] [qty] — Cairkan lembar saham\n` +
+    `• !portofolio — Cek kepemilikan modal pasar\n` +
+    `• !rampok @target — Rebut paksa koin member\n` +
+    `• !hadiah @target [item] — Berbagi inventaris\n\n` +
 
     `🎟️ *LOTERE HARIAN*\n` +
-    `!lotere — Info lotere\n` +
-    `!belitiket [qty] — Beli tiket (500/tiket)\n` +
-    `!tiketku — Cek tiketmu\n\n` +
+    `• !lotere — Info jackpot terkumpul\n` +
+    `• !belitiket [qty] — Beli tiket lotere harian\n` +
+    `• !tiketku — List tiket aktif\n\n` +
 
-    `⚔️ *GUILD*\n` +
-    `!buatguild [nama] — Buat guild (2000 koin)\n` +
-    `!gabungguild [id] — Gabung guild\n` +
-    `!keluarguild — Keluar guild\n` +
-    `!guild — Info guildmu\n` +
-    `!guildwar — War vs guild lain\n\n` +
+    `⚔️ *GUILD FACTION*\n` +
+    `• !buatguild [nama] — Bentuk aliansi (2.000 koin)\n` +
+    `• !gabungguild [id] — Masuk ke dalam markas aliansi\n` +
+    `• !keluarguild — Keluar dari aliansi\n` +
+    `• !guild — Dasbor profil aliansi\n` +
+    `• !guildwar — Tantang aliansi lain\n\n` +
 
-    `📋 *MISI & STATISTIK*\n` +
-    `!misi — Lihat misi harian & mingguan\n` +
-    `!klaimmisi [id] — Klaim reward misi\n` +
-    `!rekap — Statistik grup hari ini\n\n` +
+    `📋 *MISI & REKAP GRUP*\n` +
+    `• !misi — List target harian/mingguan\n` +
+    `• !klaimmisi [id] — Cairkan reward misi\n` +
+    `• !rekap — 5 besar member teraktif hari ini\n\n` +
 
-    `💳 *EKONOMI*\n` +
+    `💳 *EKONOMI FINANSIAL*\n` +
     `!saldo !daily !kerja !profil !leaderboard\n` +
     `!transfer !pinjam !bayarutang !asuransi\n` +
-    `!crypto !buycrypto !sellcrypto\n` +
-    `!kasgrup !bagikasbot\n\n` +
+    `!crypto !buycrypto !sellcrypto !kasgrup !bagikasbot\n\n` +
 
-    `📌 Format: *!game [taruhan] [pilihan]*\n` +
-    `Contoh: *!crash 1000 3.5* | *!togel 500 07 as*`
+    `📌 Format Taruhan: *!game [taruhan] [pilihan]*\n` +
+    `Contoh: *!crash 1000 3.5*`
   );
 }
 

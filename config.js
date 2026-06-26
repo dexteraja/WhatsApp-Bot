@@ -1,5 +1,5 @@
 // ============================================================
-//  config.js — Master Configuration (V5.1)
+//  config.js — Master Configuration (V5.4 — Clean & Aligned)
 // ============================================================
 
 global.botConfig = {
@@ -14,63 +14,44 @@ global.botConfig = {
   insuranceDurationDays: 3,
   insurancePayoutAmount: 1500,
 
+  // ── DAFTAR ASET PREMIUM & MEWAH (NILAI GEDE) ──
+  assets: [
+    { id: "supercar", name: "Hypercar Koenigsegg Jesko", emoji: "🏎️", price: 50000000, tax: 250000 },
+    { id: "jet", name: "Private Jet Gulfstream G700", emoji: "🛩️", price: 350000000, tax: 1750000 },
+    { id: "yacht", name: "Megayacht Luxury Eclipse", emoji: "🚢", price: 750000000, tax: 3750000 },
+    { id: "mansion", name: "Penthouse Premium Beverly Hills", emoji: "🏰", price: 1500000000, tax: 7500000 },
+    { id: "island", name: "Pulau Pribadi Raja Ampat", emoji: "🏝️", price: 5000000000, tax: 25000000 }
+  ],
+
   // ── KERJA ──
-  workCooldownMs: 4 * 60 * 60 * 1000,  // 4 jam
+  workCooldownMs: 4 * 60 * 60 * 1000,
   workReward: { min: 250, max: 600 },
 
   // ── CRYPTO ──
   cryptoName: "COLICOIN",
-  cryptoInitialPrice: 100,
-  cryptoPriceFluctuation: 0.20,
+  cryptoInitialPrice: 10000,
+  cryptoPriceFluctuation: 0.01,
   cryptoPriceIntervalMs: 10000,
 
   // ── KASINO ──
   casinoCooldownMs: 3000,
   slotEmojis: ["🍒", "🍋", "💎", "🍇", "7️⃣", "🔔"],
   multipliers: {
-    slotTriple:   5.0,
-    slotDouble:   1.5,
-    slotSeven:   10.0,
-    blackjack:    2.0,
-    blackjackBJ:  2.5,
-    tebakAngka:   8.0,
-    coinFlip:     2.0,
-    suit:         2.0,
-    ranjau:       1.5,
-    dadu:         2.0,
-    rolet:        3.0,
-    roletHijau:  10.0,
-    hilo:         2.0,
-    spin:         2.5,
-    spinJackpot:  5.0,
-    balapkuda:    4.0,
-    tebakkoin:    2.0,
-    jackpotGanda: 3.0,
-    bomberman:    2.0,
-    // Game baru
-    tebakkartu:   3.0,
-    tebakwarna:   2.0,
-    dadu3:        5.0,
-    tebakganjilgenap: 2.0,
-    kartupetak:   2.5,
-    membalik:     3.0,
-    tanggal:      6.0,
-    tebakprima:   4.0,
-    lemparkartu:  2.0,
-    tebakdadu:    6.0,
-    petarung:     2.0,
-    lombarenang:  3.5,
-    undian:       2.0,
-    tembakbintang:3.0,
-    pindahkoin:   2.0,
-    naiktangga:   3.0,
-    cuacahari:    2.5,
-    bombparty:    4.0,
-    tebakwaktu:   5.0,
-    baccarat:     2.0,
-    baccaratTie:  8.0,
-    dragontiger:  2.0,
-    dragontigerTie: 8.0,
+    slotTriple:   5.0, slotDouble:   1.5, slotSeven:   10.0,
+    blackjack:    2.0, blackjackBJ:  2.5, tebakAngka:   8.0,
+    coinFlip:     2.0, suit:         2.0, ranjau:       1.5,
+    dadu:         2.0, rolet:        3.0, roletHijau:  10.0,
+    hilo:         2.0, spin:         2.5, spinJackpot:  5.0,
+    balapkuda:    4.0, tebakkoin:    2.0, jackpotGanda: 3.0,
+    bomberman:    2.0, tebakkartu:   3.0, tebakwarna:   2.0,
+    dadu3:        2.0, tebakganjilgenap: 2.0, kartupetak:   2.5,
+    membalik:     3.0, tanggal:      6.0, tebakprima:   4.0,
+    lemparkartu:  2.0, tebakdadu:    6.0, petarung:     2.0,
+    lombrenang:   3.5, undian:       2.0, tembakbintang:3.0,
+    pindahkoin:   2.0, naiktangga:   3.0, cuacahari:    2.5,
+    bombparty:    4.0, tebakwaktu:   5.0, baccarat:     2.0,
+    baccaratTie:  8.0, dragontiger:  2.0, dragontigerTie: 8.0,
+    warkartu:     2.0, sicbo:        3.0, pokerliar:    5.0, plinko:       2.0,
   },
 
   // ── HUNT / MANCING / GACHA ──
@@ -108,8 +89,8 @@ global.botConfig = {
   rateLimitBanMs: 3600000,
 
   // ── KPK SYSTEM ──
-  kpkInvestigasiThreshold: 50000,   // menang kasino > 50rb = kena radar KPK
-  kpkRandomCatchChance:    0.05,    // 5% chance kena tiap transaksi besar
+  kpkInvestigasiThreshold: 50000,
+  kpkRandomCatchChance:    0.89,
 
   // ── RAMPOK ──
   rampokCooldownMs: 30 * 60 * 1000,
@@ -142,6 +123,18 @@ global.botConfig = {
     quizLocked:  "⏳ Ada kuis yang sedang berjalan. Jawab dulu!",
     onCooldown:  (w) => `⏳ Sabar dulu *${w} detik* lagi.`,
     kpkBlocked:  "🚔 KPK memblokir transaksimu! Selesaikan kasus dulu: *!statuskpk*",
+  },
+
+  // ── PAJAK TABUNGAN (DYNAMIC WEALTH TAX) ──
+  taxSystem: {
+    intervalMs: 24 * 60 * 60 * 1000,
+    brackets: [
+      { minWealth: 1000000, rate: 0.50 },
+      { minWealth: 500000,  rate: 0.15 },
+      { minWealth: 100000,  rate: 0.10 },
+      { minWealth: 5000,    rate: 0.05 },
+      { minWealth: 0,       rate: 0.00 }
+    ]
   }
 };
 

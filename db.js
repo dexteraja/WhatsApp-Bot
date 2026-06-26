@@ -21,16 +21,12 @@ function loadJSON(filePath) {
   return {};
 }
 
-// ── SISTEM ANTI-LAG (DEBOUNCER) ────────────────────────────
-// Daripada memblokir event loop dengan writeFileSync setiap detik, 
-// kita hanya menandai file yang perlu disimpan dan menyimpannya secara asinkron.
 const dirtyFiles = new Set();
 
 function saveJSON(filePath, data) {
   dirtyFiles.add(filePath);
 }
 
-// Auto-Save background worker tiap 3 detik
 setInterval(() => {
   if (dirtyFiles.has(PLAYERS_FILE)) {
     fs.writeFile(PLAYERS_FILE, JSON.stringify(players, null, 2), "utf8", () => {});
@@ -46,21 +42,18 @@ setInterval(() => {
   }
 }, 3000);
 
-// ── INISIALISASI DATA ────────────────────────────────────────
-
 const players    = loadJSON(PLAYERS_FILE);
 const groupData  = loadJSON(GROUPS_FILE);
 const rawWhitelist = loadJSON(WHITELIST_FILE);
 const whitelist    = new Set(Array.isArray(rawWhitelist) ? rawWhitelist : []);
 
-let cryptoPrice       = cfg.cryptoInitialPrice;
+let cryptoPrice       = cfg.cryptoInitialPrice || 1000;
 let playedQuizzesToday = new Set();
 const activeSessions  = {}; 
 
 function savePlayers() { saveJSON(PLAYERS_FILE, players); }
 function saveWhitelist() { saveJSON(WHITELIST_FILE, Array.from(whitelist)); }
 
-// ── GRUP WHITELIST ───────────────────────────────────────────
 function activateGroup(chatId) {
   whitelist.add(chatId);
   saveWhitelist(); 
@@ -78,31 +71,83 @@ function isGroupActive(chatId) {
   return whitelist.has(chatId);
 }
 
-// ── PLAYER ──────────────────────────────────────────────────
 function getPlayer(jid) {
+  // 1. Jika user belum terdaftar sama sekali di database, buat template baru
   if (!players[jid]) {
     players[jid] = {
       jid,
-      balance:        cfg.startingBalance,
+      balance:        cfg.startingBalance || 5000,
       inventory:      [],
+      properti:       [], 
       crypto_balance: 0,
       has_debt:       false,
       debt_amount:    0,
       insurance:      { active: false },
       stats:          { wins: 0, losses: 0 }, 
-      game_session:   { status: null, data: {} } 
+      game_session:   { status: null, data: {} },
+      last_tax_paid:  Date.now()
     };
     savePlayers(); 
   }
   
+  // 2. KUNCI AMAN: Jangan pernah timpa data lama jika sudah ada!
+  // Cukup pastikan struktur array properti dan inventory tersedia jika undefined
+  if (!players[jid].properti) players[jid].properti = [];
+  if (!players[jid].inventory) players[jid].inventory = [];
   if (!players[jid].stats) players[jid].stats = { wins: 0, losses: 0 };
   if (!players[jid].game_session) players[jid].game_session = { status: null, data: {} };
+  if (!players[jid].last_tax_paid) players[jid].last_tax_paid = Date.now();
+  
+  // 3. SAFE PARSING: Jika saldo tidak sengaja tersimpan sebagai string, ubah ke Number secara aman
+  if (typeof players[jid].balance === "string") {
+    players[jid].balance = parseInt(players[jid].balance, 10) || 0;
+  }
+  
+  // Jika karena suatu hal nilainya benar-benar NaN atau tidak ada, baru gunakan fallback
+  if (players[jid].balance === undefined || isNaN(players[jid].balance)) {
+    players[jid].balance = cfg.startingBalance || 5000;
+  }
   
   return players[jid];
 }
 
 function addBalance(jid, amount) {
   const p = getPlayer(jid);
+  // Pastikan nilai penambah adalah integer bersih
+  const validAmount = parseInt(amount, 10);
+  if (isNaN(validAmount)) return 0;
+
+  p.balance += validAmount;
+  savePlayers(); 
+  return validAmount;
+}
+
+function deductBalance(jid, amount) {
+  const p = getPlayer(jid);
+  const validAmount = parseInt(amount, 10);
+  if (isNaN(validAmount)) return 0;
+
+  const actualDeduct = Math.min(validAmount, p.balance);
+  p.balance = Math.max(0, p.balance - actualDeduct);
+
+  if (
+    p.balance === 0 &&
+    p.insurance &&
+    p.insurance.active &&
+    Date.now() < (p.insurance.expires_at || 0)
+  ) {
+    p.balance = cfg.insurancePayoutAmount || 1500;
+    p.insurance.active = false;
+    p.insurance.expires_at = null;
+  }
+
+  savePlayers();
+  return actualDeduct;
+}
+
+function addBalance(jid, amount) {
+  const p = getPlayer(jid);
+  if (isNaN(p.balance)) p.balance = cfg.startingBalance || 5000;
   p.balance += amount;
   savePlayers(); 
   return amount;
@@ -110,37 +155,47 @@ function addBalance(jid, amount) {
 
 function deductBalance(jid, amount) {
   const p = getPlayer(jid);
-  // FIX BUGS: Clamp potongan agar saldo TIDAK PERNAH turun di bawah 0
+  if (isNaN(p.balance)) p.balance = cfg.startingBalance || 5000;
   const actualDeduct = Math.min(amount, p.balance);
   p.balance = Math.max(0, p.balance - actualDeduct);
 
-  // FIX BUGS: Jika saldo menjadi 0 dan asuransi aktif, pulihkan otomatis ke insurancePayoutAmount
   if (
     p.balance === 0 &&
     p.insurance &&
     p.insurance.active &&
     Date.now() < (p.insurance.expires_at || 0)
   ) {
-    p.balance = cfg.insurancePayoutAmount;
+    p.balance = cfg.insurancePayoutAmount || 1500;
     p.insurance.active = false;
     p.insurance.expires_at = null;
   }
 
   savePlayers();
-  return actualDeduct; // FIX BUGS: Kembalikan jumlah aktual yang dipotong, bukan amount asli
+  return actualDeduct;
 }
 
 function getLeaderboard(limit = 10) {
   return Object.values(players)
     .sort((a, b) => {
-      const asetA = a.balance + (a.crypto_balance || 0) * cryptoPrice;
-      const asetB = b.balance + (b.crypto_balance || 0) * cryptoPrice;
-      return asetB - asetA;
+      let wealthA = (a.balance || 0) + ((a.crypto_balance || 0) * cryptoPrice);
+      (a.properti || []).forEach(item => {
+        const id = typeof item === 'string' ? item.toLowerCase() : (item.id ? item.id.toLowerCase() : "");
+        const match = cfg.assets.find(as => as.id.toLowerCase() === id);
+        if (match) wealthA += (match.price || 0);
+      });
+
+      let wealthB = (b.balance || 0) + ((b.crypto_balance || 0) * cryptoPrice);
+      (b.properti || []).forEach(item => {
+        const id = typeof item === 'string' ? item.toLowerCase() : (item.id ? item.id.toLowerCase() : "");
+        const match = cfg.assets.find(as => as.id.toLowerCase() === id);
+        if (match) wealthB += (match.price || 0);
+      });
+
+      return wealthB - wealthA;
     })
     .slice(0, limit);
 }
 
-// ── GROUP KAS ───────────────────────────────────────────────
 function getGroup(chatId) {
   if (!groupData[chatId]) {
     groupData[chatId] = { chatId, cash_pool: 0, members: [] };
@@ -151,7 +206,7 @@ function getGroup(chatId) {
 
 function addCashPool(chatId, amount) {
   const g = getGroup(chatId);
-  g.cash_pool += amount;
+  g.cash_pool = (g.cash_pool || 0) + amount;
   saveJSON(GROUPS_FILE, groupData); 
 }
 
@@ -163,27 +218,78 @@ function clearCashPool(chatId) {
 
 function registerGroupMember(chatId, jid) {
   const g = getGroup(chatId);
+  if (!g.members) g.members = [];
   if (!g.members.includes(jid)) {
     g.members.push(jid);
     saveJSON(GROUPS_FILE, groupData); 
   }
 }
 
-// ── CRYPTO ───────────────────────────────────────────────────
+// ── SISTEM PAJAK BACKGROUND LOOP (SINKRON DENGAN PROPERTI.JS) ──
+setInterval(() => {
+  const now = Date.now();
+
+  for (const jid in players) {
+    const p = players[jid];
+    if (!p.last_tax_paid) p.last_tax_paid = now;
+    
+    const interval = (cfg && cfg.taxSystem && cfg.taxSystem.intervalMs) || 86400000;
+
+    if (now - p.last_tax_paid >= interval) {
+      let totalWealth = (p.balance || 0) + ((p.crypto_balance || 0) * cryptoPrice);
+      let assetTax = 0;
+
+      // Membaca array properti secara sinkron
+      if (p.properti && Array.isArray(p.properti)) {
+        for (const item of p.properti) {
+          const cleanId = typeof item === 'string' ? item.toLowerCase() : (item.id ? item.id.toLowerCase() : "");
+          const assetInfo = cfg.assets ? cfg.assets.find(a => a.id.toLowerCase() === cleanId) : null;
+          
+          if (cleanId === "lamborghini_aventador" || (assetInfo && assetInfo.name?.toLowerCase() === "lamborghini aventador")) {
+            if (assetInfo) totalWealth += (assetInfo.price || 0);
+            assetTax += 80000000; // Ketetapan Pajak Lamborghini Aventador 80 Juta
+          } else if (assetInfo) {
+            totalWealth += (assetInfo.price || 0);
+            assetTax += (assetInfo.tax || 0);
+          }
+        }
+      }
+
+      let incomeTaxRate = 0;
+      if (cfg && cfg.taxSystem && Array.isArray(cfg.taxSystem.brackets)) {
+        for (const bracket of cfg.taxSystem.brackets) {
+          if (totalWealth >= bracket.minWealth) {
+            incomeTaxRate = bracket.rate;
+            break;
+          }
+        }
+      }
+
+      const incomeTaxAmount = Math.floor(totalWealth * incomeTaxRate);
+      const totalTax = incomeTaxAmount + assetTax;
+
+      if (totalTax > 0) {
+        p.balance = Math.max(0, (p.balance || 0) - totalTax);
+      }
+      
+      p.last_tax_paid = now;
+      dirtyFiles.add(PLAYERS_FILE);
+    }
+  }
+}, 60 * 60 * 1000);
+
 function getCryptoPrice() { return cryptoPrice; }
 function tickCryptoPrice() {
-  const fluctuation = (Math.random() * 2 - 1) * cfg.cryptoPriceFluctuation;
+  const fluctuation = (Math.random() * 2 - 1) * (cfg.cryptoPriceFluctuation || 0.05);
   cryptoPrice = Math.max(1, Math.round(cryptoPrice * (1 + fluctuation)));
 }
-setInterval(tickCryptoPrice, cfg.cryptoPriceIntervalMs);
+setInterval(tickCryptoPrice, cfg.cryptoPriceIntervalMs || 600000);
 
-// ── QUIZ ─────────────────────────────────────────────────────
 function isQuizPlayed(id) { return playedQuizzesToday.has(id); }
 function markQuizPlayed(id) { playedQuizzesToday.add(id); }
 function quizCount() { return playedQuizzesToday.size; }
 function resetQuizzes() { playedQuizzesToday.clear(); }
 
-// ── SESSION AKTIF ────────────────────────────────────────────
 function setActiveSession(chatId, data) { activeSessions[chatId] = data; }
 function getActiveSession(chatId) { return activeSessions[chatId] || null; }
 function clearActiveSession(chatId) { delete activeSessions[chatId]; }
@@ -205,5 +311,5 @@ module.exports = {
   getCryptoPrice,
   isQuizPlayed, markQuizPlayed, quizCount, resetQuizzes,
   setActiveSession, getActiveSession, clearActiveSession,
-  saveJSON, PLAYERS_FILE 
+  saveJSON, PLAYERS_FILE, players
 };
